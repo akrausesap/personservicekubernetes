@@ -79,7 +79,9 @@ kubectl apply -f mongo-kubernetes.yaml -n <your namespace>
 
 ## Try out on Kyma
 
+
 After deployyment you can access the swagger documentation under https://{kymahost}/swagger-ui.html. This also allows you to try it out. 
+
 
 If you don't like Open API (fka. Swagger) here is some other documentation:
 
