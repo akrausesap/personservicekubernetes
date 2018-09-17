@@ -1,8 +1,8 @@
 # A sample Application for running Spring Boot on Kubernetes/Kyma with Mongodb
 
 ## Table of Contents
-  - [Kyma](#kyma)
-  - [About](#about)
+  - [Overview](#overview)
+  - [Prerequisites](#prerequisites)
   - [First Steps: Deploy the application](#first-steps-deploy-the-application)
     - [Environment Setup](#environment-setup)
     - [Mongo DB](#mongo-db)
@@ -39,26 +39,25 @@
     - [Security For Lambdas (Not on Minikube)](#security-for-lambdas-not-on-minikube)
     - [Test the Service](#test-the-service)
 
+## Overview
 
-## Kyma
+This sample application was created to give you a running end to end sample application implemented in Java / Spring Boot running on Kyma. In the end state it should make all the features Kyma delivers visible to you as developers. Also it should help you to get started and implement your own scenarios on Kyma. 
 
-This App runs on Kyma (https://kyma-project.io/; for local installation see: https://github.com/kyma-project/kyma/tree/master/installation). 
+> **NOTE:** This showcase is not meant to be Best Practice / Production ready code. Instead it is often kept simple with manual steps to make clear what actually happens. If you have issues/remarks while using it, please feel free to feedback.  
 
-## About
+## Prerequisites
 
-This sample application was created to give you a running end to end sample application implemented in Java / Spring Boot running on Kyma. In the end state it should make all the features Kyma delivers visible to you as developers. Also it should help you to get started and implement your own scenarios on Kyma. However this is not meant to be Best Practice / Production ready code. Instead it is often kept simple with manual steps to make clear what actually happens. If you have issues/remarks while using it, please feel free to feedback.  
+This application runs on [Kyma](https://kyma-project.io) therefor to try out this example on your local machine you need to [install Kyma](https://kyma-project.io/docs/latest/root/kyma#getting-started-local-kyma-installation) first, or have access to Kyma cluster.
 
-
-## First Steps: Deploy the application
+## 1. Deploy the application
 
 ### Environment Setup
 
-An Environment is a custom Kyma security and organizational unit based on the concept of Kubernetes Namespaces. Kyma Environments allow you to divide the cluster into smaller units to use for different purposes, such as development and testing.
+An Environment is a custom Kyma security and organizational unit based on the concept of Kubernetes Namespaces. Kyma Environments allow you to divide the cluster into smaller units to use for different purposes, such as development and testing. Learn more from official documentation about [Environments](https://kyma-project.io/docs/latest/root/kyma#details-environments)
 
-To setup our environment issue the following command: `kubectl apply -f environment.yaml`
+To setup environment for this showcase call this command: `kubectl apply -f environment.yaml`. Now, once you call `kubectl get namespaces -l=env=true` among other Environments you will see the one you just created
 
-Furthermore this adapts the default resource constraints to ensure we don't hit ceilings in terms of memory usage. (However on Minikube/Local installation this might be challenging)
-
+You also just created default resource constraints to ensure we don't hit ceilings in terms of memory usage. (However on Minikube/Local installation this might be challenging). For more details read [Configure Default Memory Requests and Limits for a Namespace](https://kubernetes.io/docs/tasks/administer-cluster/manage-resources/memory-default-namespace/)
 
 ### Mongo DB
 
