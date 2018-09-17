@@ -1,43 +1,44 @@
 # A sample Application for running Spring Boot on Kubernetes/Kyma with Mongodb
 
 ## Table of Contents
-  - [Overview](#overview)
-  - [Prerequisites](#prerequisites)
-  - [First Steps: Deploy the application](#first-steps-deploy-the-application)
-    - [Environment Setup](#environment-setup)
-    - [Mongo DB](#mongo-db)
-    - [Java Build](#java-build)
-    - [Docker Credential Helper Setup](#docker-credential-helper-setup)
-    - [Deploy to Local Kyma (Minikube)](#deploy-to-local-kyma-minikube)
-    - [Deploy to "real" Kyma Cluster](#deploy-to-real-kyma-cluster)
-    - [Checks](#checks)
-    - [Try out on Kyma](#try-out-on-kyma)
-  - [Connect your Service to Kyma as Extension Platform](#connect-your-service-to-kyma-as-extension-platform)
-    - [About](#about)
-    - [Create new Application Connector Instance on Kyma](#create-new-application-connector-instance-on-kyma)
-    - [Pair Person Service with Kyma Application Connector](#pair-person-service-with-kyma-application-connector)
-    - [Reconfigure Person Service](#reconfigure-person-service)
-    - [Checks](#checks)
-    - [Run the Scenario](#run-the-scenario)
-  - [Extend your Person Service](#extend-your-person-service)
-    - [Intro](#intro)
-    - [Create Service Instance](#create-service-instance)
-    - [Develop your Lambda Function](#develop-your-lambda-function)
-    - [Deploy your Lambda Function](#deploy-your-lambda-function)
-    - [Test your Lambda](#test-your-lambda)
-  - [Bind your Person Service to a brokered Redis Backing Service](#bind-your-person-service-to-a-brokered-redis-backing-service)
-    - [Intro](#intro)
-    - [Create Redis Service Instance and Bind it to the Person Service](#create-redis-service-instance-and-bind-it-to-the-person-service)
-    - [Update Kubernetes Deployment Configuration](#update-kubernetes-deployment-configuration)
-    - [Test the Service](#test-the-service)
-  - [Protect the Service](#protect-the-service)
-    - [Intro](#intro)
-    - [Deploy OAuth2 Authorization Server](#deploy-oauth2-authorization-server)
-    - [Adapt Kubernetes Deployment](#adapt-kubernetes-deployment)
-    - [Optional: Create IDP Preset](#optional-create-idp-preset)
-    - [Secure your API](#secure-your-api)
-    - [Security For Lambdas (Not on Minikube)](#security-for-lambdas-not-on-minikube)
-    - [Test the Service](#test-the-service)
+- [Overview](#overview)
+- [Prerequisites](#prerequisites)
+- [Deploy the application](#deploy-the-application)
+  * [Environment Setup](#environment-setup)
+  * [Mongo DB](#mongo-db)
+  * [Java Build](#java-build)
+  * [Docker Credential Helper Setup](#docker-credential-helper-setup)
+  * [Deploy to Local Kyma (Minikube)](#deploy-to-local-kyma--minikube-)
+  * [Deploy to "real" Kyma Cluster](#deploy-to--real--kyma-cluster)
+  * [Checks](#checks)
+  * [Try out on Kyma](#try-out-on-kyma)
+- [Connect your Service to Kyma as Extension Platform](#connect-your-service-to-kyma-as-extension-platform)
+  * [About](#about)
+  * [Create new Application Connector Instance on Kyma](#create-new-application-connector-instance-on-kyma)
+  * [Pair Person Service with Kyma Application Connector](#pair-person-service-with-kyma-application-connector)
+  * [Reconfigure Person Service](#reconfigure-person-service)
+  * [Checks](#checks-1)
+  * [Run the Scenario](#run-the-scenario)
+- [Extend your Person Service](#extend-your-person-service)
+  * [Intro](#intro)
+  * [Create Service Instance](#create-service-instance)
+  * [Develop your Lambda Function](#develop-your-lambda-function)
+  * [Deploy your Lambda Function](#deploy-your-lambda-function)
+  * [Test your Lambda](#test-your-lambda)
+- [Bind your Person Service to a brokered Redis Backing Service](#bind-your-person-service-to-a-brokered-redis-backing-service)
+  * [Intro](#intro-1)
+  * [Create Redis Service Instance and Bind it to the Person Service](#create-redis-service-instance-and-bind-it-to-the-person-service)
+  * [Update Kubernetes Deployment Configuration](#update-kubernetes-deployment-configuration)
+  * [Test the Service](#test-the-service)
+- [Protect the Service](#protect-the-service)
+  * [Intro](#intro-2)
+  * [Deploy OAuth2 Authorization Server](#deploy-oauth2-authorization-server)
+  * [Adapt Kubernetes Deployment](#adapt-kubernetes-deployment)
+  * [Optional: Create IDP Preset](#optional--create-idp-preset)
+  * [Secure your API](#secure-your-api)
+  * [Security For Lambdas (Not on Minikube)](#security-for-lambdas--not-on-minikube-)
+  * [Test the Service](#test-the-service-1)
+
 
 ## Overview
 
@@ -49,7 +50,7 @@ This sample application was created to give you a running end to end sample appl
 
 This application runs on [Kyma](https://kyma-project.io) therefor to try out this example on your local machine you need to [install Kyma](https://kyma-project.io/docs/latest/root/kyma#getting-started-local-kyma-installation) first, or have access to Kyma cluster.
 
-## 1. Deploy the application
+## Deploy the application
 
 ### Environment Setup
 
@@ -63,19 +64,17 @@ You also just created default resource constraints to ensure we don't hit ceilin
 
 To deploy Mongodb use Helm (https://helm.sh/). To install helm do the following:
 
-Innitialize Helm (if not already done, client-only option as kyma already comes with tiller installed):
+1. Innitialize Helm (if not already done, client-only option as kyma already comes with tiller installed):
 `helm init --client-only` 
-
-Then deploy Mongo DB
-
-`helm install --name first-mongo   --set persistence.size=2Gi,    stable/mongodb --namespace personservice`
+2. Then deploy Mongo DB:
+`helm install --name first-mongo --set persistence.size=2Gi stable/mongodb --namespace personservice`
 
 ### Java Build
 
 Project is built using: mvn clean package or mvn clean install. It uses jib (https://github.com/GoogleContainerTools/jib/tree/master/jib-maven-plugin) to build and push to a docker registry (which does not require a local docker install). You **must** use the following maven properties to adapt to your local installation: 
 
 * docker.repositoryname: Docker repository that the image will be published to
-* jib.credentialhelper: docker credential helper that will be used to acquire docker hub (adapt to YOUR Operating System, pass or secretservice for Linuy, wincred for Windows and osxkeychain for Linux)
+* jib.credentialhelper: docker credential helper that will be used to acquire docker hub (adapt to YOUR Operating System, pass or secretservice for Linux, wincred for Windows and osxkeychain for Mac)
 
 
 You **can** use the following maven properties to adapt to your local installation: 
@@ -120,7 +119,7 @@ To read a set of credentials:
 
 ### Deploy to Local Kyma (Minikube)
 
-Deployment to kyma requires to upload a configmap and also a kubernetes deployment and a service.
+Deployment to Kyma requires to upload a configmap and also a kubernetes deployment and a service.
 
 Before deploying the attached files you need to adapt `mongo-kubernetes-local1.yaml` to your cluster. The parts that require attention are marked with `# changeme:` and instructions are available in the comments.
 
