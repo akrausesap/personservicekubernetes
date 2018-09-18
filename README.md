@@ -171,7 +171,7 @@ All pods should have status running. Otherwise repeat until this is the case.
 
 ### Try out on Kyma
 
-After deployyment you can access the swagger documentation under https://{kymahost}/swagger-ui.html. This also allows you to try it out. 
+After deployyment you can access the swagger documentation under https://personservice.{clusterhost}/swagger-ui.html. This also allows you to try it out. 
 
 If you don't like Open API (fka. Swagger) here is some other documentation:
 
@@ -194,18 +194,10 @@ The API is accessible using the following endpoints:
 ``` 
 * GET /api/v1/person/{personid}: Return all data for person with id `personid`
 * DELETE /api/v1/person/{personid}: Delete person with id `personid`
-* PATCH /api/v1/person/{personid}: Update person with id `personid` with the following data:
+* PATCH /api/v1/person/{personid}: Update person's name with id `personid` with the following data:
 ```
 {
 	"firstName":"Jack",
-	"lastName":"Doe",
-	"streetAddress":"Nymphenburger Str.",
-	"houseNumber":"86",
-	"zip":"80636",
-	"city":"Muenchen",
-	"extensionFields":{
-		"countryIso2":"De"
-	}
 }
 ``` 
 
@@ -237,55 +229,46 @@ Steps 3 and 4 are based on deploying additional configuration to the kyma instan
 
 ### Create new Application Connector Instance on Kyma
 
-To connect external systems (so called remote environments) you need to use the application connector (For Details see: https://kyma-project.io/docs/latest/components/application-connector).
+To connect external systems (so called remote environments) you need to use the application connector. For information see: https://kyma-project.io/docs/latest/components/application-connector.
 
-Application connector requires deployment of a new environment specific gateway. To do this execute the below helm command (for details see: https://kyma-project.io/docs/latest/components/application-connector#details-deploy-a-new-application-connector):
+Application connector requires deployment of a new environment specific gateway:
+1. Clone Kyma and from kyma location call the following command:
+   ```
+   helm install --name personservicekubernetes --set deployment.args.sourceType=personservicekubernetes --set global.isLocalEnv=false --set *global.domainName=kyma.local* --namespace kyma-integration ./resources/remote-environments
+   ```
+   Replace *global.domainName=kyma.local* with your kyma domain.
 
-helm install --name personservicekubernetes --set deployment.args.sourceType=personservicekubernetes --set global.isLocalEnv=false --set *global.domainName=kyma.local* --namespace kyma-integration ./remote-environments
-
-Replace *global.domainName=kyma.local* with your kyma domain.
-
-You can download the helm chart from https://kyma-project.io/docs/latest/components/assets/remote-environments.zip 
-
-After that you will have to restart the pod core-ui-api-* (kubectl delete in namespace kyma-system). After this your new Environment shall show up as green in the Kyma Console under "Administration -> Remote Environments" (wait for the pod core-ui-api-* to be running again).
+2. Restart the UI api layer by deleting its Pods with `kubectl delete pod -l=app=ui-api -n kyma-system`. After Pods are recreated, your new Environment shall show up as green in the Kyma Console under `Administration -> Remote Environments`
 
 ### Pair Person Service with Kyma Application Connector
 
-Now you need to pair the person service with the newly deployed application connector gateway instance. To do that, click on "connect remote environment":
- 
+Now you need to pair the person service with the newly deployed application connector gateway instance. 
+
+1. Click on `Connect Remote Environment` and open the link you get on the screen in another browser tab
 ![Connect Remote Environment Screenshot](images/remoteenvironmentpairing.png)
 
-Copy and follow the link in a new browser window:
-
+2. Copy the `csrUrl` address
 ![Connect Remote Environment Response Screenshot](images/remoteenvironmentpairing2.png)
 
-Now you can create a Certificate Signing request using OpenSSL (https://www.openssl.org/) a series of commands. Before doing this create a new directory called `security` and then go ahead with OpenSSL in the new dir.
-
+3. Create a Certificate Signing request using OpenSSL (https://www.openssl.org/) a series of commands. Before doing this create a new directory called `security` and then go ahead with OpenSSL in the new dir.
 Create Key: 
-
-```
-openssl genrsa -out personservicekubernetes.key 2048
-openssl req -new -sha256 -out personservicekubernetes.csr -key personservicekubernetes.key -subj "/OU=OrgUnit/O=Organization/L=Waldorf/ST=Waldorf/C=DE/CN=personservicekubernetes"
-```
-
-Now use the REST client of your choice to create the following rest call to the URL (with token highlighted in the above screenshot:
-
+   ```
+   openssl genrsa -out personservicekubernetes.key 2048
+   openssl req -new -sha256 -out personservicekubernetes.csr -key personservicekubernetes.key -subj "/OU=OrgUnit/O=Organization/L=Waldorf/ST=Waldorf/C=DE/CN=personservicekubernetes"
+   openssl base64 -in personservicekubernetes.csr
+   ```
+4. Use the REST client of your choice to create the following rest call to the full URL with token you copied previously:
 ![Connect Remote Environment CSR Screenshot](images/remoteenvironmentpairing3.png)
+5. After sending you will receive a base 64 encoded signed certificate. Decode the response and save as `personservicekubernetes.crt`.
+6. Now you can use OpenSSL and java keytool (part of the jdk) to create a PKCS#12 (P12, also good for browser based testing) file and based on that create a Java Key Store (JKS, for the Person Service) for our service. **Do not change any passwords, except if you really know what you are doing!!!**
+   ```
+   openssl pkcs12 -export -name personservicekubernetes -in personservicekubernetes.crt -inkey personservicekubernetes.key -out personservicekubernetes.p12 -password pass:kyma-project
 
-After sending you will receive a base 64 encoded signed certificate. Decode the response and save as personservicekubernetes.crt.
-
-Now you can use OpenSSL and java keytool (part of the jdk) to create a PKCS#12 (P12, also good for browser based testing) file and based on that create a Java Key Store (JKS, for the Person Service) for our service. **Do not change any passwords, except if you really know what you are doing!!!**
-
-```
-openssl pkcs12 -export -name personservicekubernetes -in personservicekubernetes.crt -inkey personservicekubernetes.key -out personservicekubernetes.p12 -password pass:kyma-project
-
-keytool -importkeystore -destkeystore personservicekubernetes.jks -srckeystore personservicekubernetes.p12 -srcstoretype pkcs12 -alias personservicekubernetes  -srcstorepass kyma-project -storepass kyma-project
-```
-
-Now copy the resulting `personservicekubernetes.p12` file to folder security. 
+   keytool -importkeystore -destkeystore personservicekubernetes.jks -srckeystore personservicekubernetes.p12 -srcstoretype pkcs12 -alias personservicekubernetes  -srcstorepass kyma-project -storepass kyma-project
+   ```
+7. Now copy the resulting `personservicekubernetes.p12` file to `security` directory. 
 
 To test your deployed application connector instance you can also import the personservicekubernetes.p12 file into your Browser and call the url depicted as metadataUrl in the initial pairing response JSON. If you are running on locally on Minikube the port of the gateway needs to be determined separately. To do this, issue the following command:
-
 ```
 kubectl -n kyma-system get svc core-nginx-ingress-controller -o 'jsonpath={.spec.ports[?(@.port==443)].nodePort}'
 ```
@@ -294,11 +277,11 @@ The use the resulting port in your URL, e.g.: https://gateway.{clusterhost}:{por
 
 ### Reconfigure Person Service
 
-To start with we need to deploy the newly created keystore to the cluster. to do so change directory to `security` and then issue the following command:
+To start with we need to deploy the newly created keystore to the cluster. To do so change directory to `security` and then issue the following command:
 
 `kubectl create secret generic kyma-certificate --from-file=personservicekubernetes.jks -n personservice`
 
-After that we need to create a new config map which is containing a file with all details needed to register the Person Service at the Kyma Cluster. If you want to know more about this step, refer to https://kyma-project.io/docs/latest/components/application-connector#details-api and the surrounding sections. For simplicity all registration information is maintained in file `registration/registrationfile.json`. The contents of this file will be posted against the `/v1/metadata/services` endpoint. If you are running on a "real" cluster, you **must** update the `targetUrl` field in the `api` block to point to your Person Service:
+After that you need to create a new config map which is containing a file with all details needed to register the Person Service at the Kyma Cluster. If you want to know more about this step, refer to https://kyma-project.io/docs/latest/components/application-connector#details-api. For simplicity all registration information is maintained in file `registration/registrationfile.json`. The contents of this file will be posted against the `/v1/metadata/services` endpoint. If you are running on a "real" cluster, you **must** update the `targetUrl` field in the `api` block to point to your Person Service:
 
 ```
 "api": {
@@ -326,7 +309,7 @@ Now (based on your Kyma cluster type) you again need to update the fields marked
 
 ### Checks
 
-To check whether your changes are active, issue the following command untiul you again have **exactly** 2 Pods of `personservice-*-*` in status running: `kubectl get pods -n personservice`.
+To check whether your changes are active, issue the following command until you again have **exactly** 2 Pods of `personservice-*-*` in status running: `kubectl get pods -n personservice`.
 
 After that issue a kubectl describe command for 1 of the pods (replacing '\*' with actual values): `kubectl describe pod personservice-*-* -n personservice`
 
@@ -378,7 +361,7 @@ Volumes:
 
 ### Run the Scenario
 
-After deployyment you can access the swagger documentation under https://{kymahost}/swagger-ui.html. Here you should execute the POST against `/api/v1/applicationconnector/registration`. This will perform step 3 of the pairing process.
+After deployment you can access the swagger documentation under https://{kymahost}/swagger-ui.html. Here you should execute the POST against `/api/v1/applicationconnector/registration`. This will perform step 3 of the pairing process.
 
 ![Remote Environment Registration Screenshot](images/remoteenvironmentregistration.png)
 
@@ -386,7 +369,7 @@ Now you should see the following under Remote Environments:
 
 ![Remote Environment Registration Screenshot](images/remoteenvironmentregistration2.png)
 
-This means now you can bind this 'Remote Environment' to a 'Kyma Environment' and process events in Serverless Lambda functions. To do so, bind the Remote Environment 'personservicekubernetes' to the Kyma Environment 'personservice'. Then go to the Kyma Environment personservice's 'Service Catalog' and explore the Service 'Person API'.
+This means now you can bind this 'Remote Environment' to a 'Kyma Environment' and process events in Serverless Lambda functions. To do so, bind the Remote Environment 'personservicekubernetes' to the Kyma Environment 'personservice' by clicking `Create Binding`. Then go to the Kyma Environment personservice's 'Service Catalog' and explore the Service 'Person API'.
 
 ![Remote Environment Registration Screenshot](images/remoteenvironmentregistration3.png)
 
