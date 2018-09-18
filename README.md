@@ -1,6 +1,7 @@
 # A sample Application for running Spring Boot on Kubernetes/Kyma with Mongodb
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [Deploy the application](#deploy-the-application)
@@ -38,7 +39,17 @@
   * [Secure your API](#secure-your-api)
   * [Security For Lambdas (Not on Minikube)](#security-for-lambdas--not-on-minikube-)
   * [Test the Service](#test-the-service-1)
-
+- [Operate your Service: Make it Self-Healing](#operate-your-service--make-it-self-healing)
+  * [Intro](#intro-3)
+  * [Preparation](#preparation)
+  * [Determining whether your service is alive](#determining-whether-your-service-is-alive)
+  * [Determining whether your service is ready to serve traffic](#determining-whether-your-service-is-ready-to-serve-traffic)
+  * [Deploying to Kyma](#deploying-to-kyma)
+  * [Testing](#testing)
+- [Operate your Service: Traces and Logs](#operate-your-service--traces-and-logs)
+  * [Intro](#intro-4)
+  * [Testing Tracing](#testing-tracing)
+  * [Testing Logging](#testing-logging)
 
 ## Overview
 
@@ -160,7 +171,7 @@ kubectl apply -f mongo-kubernetes-cluster1.yaml -n personservice
 * Kubernetes Service pointing towards the pods created by the Deployment
 * Kyma API exposing the service through an Istio Ingress
 
-Your service should now be accessible on whatever you specified under `hostname: personservice.{clusterhost}`
+Your service should now be accessible on whatever you specified under `personservice.{clusterhost}` (clusterhost being the hostname of your kyma cluster).
 
 
 ### Checks
@@ -263,10 +274,10 @@ Create Key:
 6. Now you can use OpenSSL and java keytool (part of the jdk) to create a PKCS#12 (P12, also good for browser based testing) file and based on that create a Java Key Store (JKS, for the Person Service) for our service. **Do not change any passwords, except if you really know what you are doing!!!**
    ```
    openssl pkcs12 -export -name personservicekubernetes -in personservicekubernetes.crt -inkey personservicekubernetes.key -out personservicekubernetes.p12 -password pass:kyma-project
-
    keytool -importkeystore -destkeystore personservicekubernetes.jks -srckeystore personservicekubernetes.p12 -srcstoretype pkcs12 -alias personservicekubernetes  -srcstorepass kyma-project -storepass kyma-project
    ```
-7. Now copy the resulting `personservicekubernetes.p12` file to `security` directory. 
+7. Now copy the resulting `personservicekubernetes.jks` file to `security` directory. 
+
 
 To test your deployed application connector instance you can also import the personservicekubernetes.p12 file into your Browser and call the url depicted as metadataUrl in the initial pairing response JSON. If you are running on locally on Minikube the port of the gateway needs to be determined separately. To do this, issue the following command:
 ```
@@ -725,6 +736,8 @@ Then you can go to `https://{hostname}/swagger-ui.html`. Test the following oper
 }
 ```
 
+If you are running on locally on Minikube you also need to adapt your hosts file to make sure the hostname for the tokenissuer is properly mapped to your minikube IP. [Deploy to Local Kyma (Minikube)](#deploy-to-local-kyma-minikube) describes how to do this (in the very end).
+
 ### Adapt Kubernetes Deployment
 
 In order for the person service API to validate JWT tokens, you need to flip an environment variable (Activate the Security Profile):
@@ -902,9 +915,9 @@ When you create a new person, your Lambda will fail. To fix it, we need to adapt
 
 Replace:
 
-* /<tokenservicehost/>: host name configured for token service
-* /<issuer/>: issuer configured in API
-* /<kymahost/>: hostname of kyma instance
+* `<tokenservicehost/>`: host name configured for token service
+* `<issuer/>`: issuer configured in API
+* `<kymahost/>`: hostname of kyma instance
 
 Then issue the following commands:
 
@@ -957,3 +970,242 @@ This should now return an unauthorized response telling you that you are missing
 
 Through that you have seen how Kyma and your application complement each other with regards to security.
 
+## Operate your Service: Make it Self-Healing
+
+### Intro 
+Kubernetes (which Kyma is based on) is based on the assumption that you as a developer declare a target state and kubernetes manages the way to get there. This means that e.g. you specify that your deployment should consist of 2 instances of personservice and kubernetes will ensure that there are always (if resources permit) 2 instances running. Sometimes however we need to get more granular as your service might appear running but is actually hanging and hence damaged, or it is simply to busy to serve traffic. his is where the Self-Healing which we are enabling in this section kicks in.
+
+### Preparation
+In order to free-up resources in your cluster, we need to change a couple of things. Basically we need to go back to an older version of our deployment which does not require a redis cache anymore or authentication and authorization. To do that go to your service catalog and first unbind your redis service instance from personservice and then delete the service instance. 
+
+Also delete the OAuth 2 Service from your cluster: `kubectl delete -f kubernetes-kyma.yaml -n personservice`
+
+
+The `kubectl get pods -n personservice` should now yield an output comparable to the one below (ignoring whether the personservice is actually running or damaged):
+
+```
+NAME                                  READY     STATUS    RESTARTS   AGE
+first-mongo-mongodb-b98bd6f8b-7dv5q   1/1       Running   0          7h
+personservice-755f847c9d-x5xks        2/2       Running   0          7h
+```
+
+### Determining whether your service is alive 
+
+Spring Boot comes with a functionality called actuator. This lets you control and determine the status of the spring application. For the person service we have activated it and exposed it as REST API on port 8081. This nicely separates it from the externally exposed api and keeps it reachable only from within the cluster. The key endpoint for determining service health is the /actuator/health resource. It will return "UP" (HTTP 200) or "DOWN" (HTTP 503). Now we are going to exploit this in kubernetes.
+
+Basically we will make the Kubelet invoke this actuator periodically and based on the result 200 or 503 determine whether the service is up or down. If the service is down it should dispose it and start a new one to get back to the target state. To do so we need to look the deployment spec (mongo-kubernetes-cluster5.yml or mongo-kubernetes-local5.yml) and find the section for the lifenssProbe:
+
+```
+             ports:
+              - containerPort: 8080
+                name: http
+              - containerPort: 8081
+                name: actuatorhttp
+             livenessProbe:
+                httpGet:
+                   path: /actuator/health
+                   port: 8081
+                initialDelaySeconds: 60
+                periodSeconds: 60
+                failureThreshold: 3  
+                    
+```
+
+Under ports we have exposed port 8081 with the name actuatorhttp. We have subsequently defined `livenessProbe` which periodically (every 60 seconds) makes a GET request to /actuator/health. If it fails 3 times in a row the container will be disposed and recreated.
+
+### Determining whether your service is ready to serve traffic
+
+Sometimes services are simply just too busy to serve traffic (e.g. whne executing batch loads, etc.). This is where kubernetes offers to remove a service from loadbalancing until it reports back. To support this `DemoReadinessIndicator.java` was implemented. It is a custom actuator that reports the readiness status. HTTP 200 means ready and HTTP 503 means not ready.
+
+To periodically invoke this endpoint the following section was added to the deployment manifest (mongo-kubernetes-cluster5.yml or mongo-kubernetes-local5.yml):
+
+```
+             readinessProbe:
+                httpGet:
+                   path: /actuator/ready
+                   port: 8081
+                periodSeconds: 30
+                initialDelaySeconds: 20
+                failureThreshold: 1
+                successThreshold: 2  
+```
+
+We have Defined `readinessProbe` which periodically (every 30 seconds) makes a GET request to /actuator/ready. If it fails 1 time the pod will be excluded from loadbalancing. Only after 2 successful calls it will be again used for loadbalancing.
+
+### Deploying to Kyma
+
+In order for the personservice to be self-healing, `mongo-kubernetes-local5.yaml` or `mongo-kubernetes-cluster5.yaml` have been adapted. However you still need to replace the values depicted with `#changeme` to cater to your environment. 
+
+* Local:
+
+```
+kubectl apply -f mongo-kubernetes-local5.yaml -n personservice
+kubectl delete pods -n personservice -l app=personservice
+
+```
+
+* Cluster:
+
+```
+kubectl apply -f mongo-kubernetes-local5.yaml -n personservice
+kubectl delete pods -n personservice -l app=personservice
+```
+
+The `kubectl get pods -n personservice` should after some time yield an output comparable to the one below:
+
+```
+NAME                                  READY     STATUS    RESTARTS   AGE
+first-mongo-mongodb-b98bd6f8b-7dv5q   1/1       Running   0          7h
+personservice-755f847c9d-x5xks        2/2       Running   0          7h
+personservice-755f847c9d-x5z29        2/2       Running   0          7h
+```
+
+### Testing
+
+First of all you should verify that both pods are serving traffic to you. In order to do that, call the `/api/v1/person` endpoint (GET) a couple of times and in the responses check the header `x-serving-host`. It should change frequently and give you back the pod names.
+
+Now we can start breaking the service. To see the results we first of all issue the following command `kubectl get pods -n personservice -w`. It will automaticylla refresh the status of the pods on the commandline.
+
+To make one of the services appear not alive issue a POST Request to `/api/v1/monitoring/health?isUp=false`. This will show the following picture after some time (around 3 minutes):
+
+```
+first-mongo-mongodb-b98bd6f8b-7dv5q   1/1       Running   0          8h
+personservice-755f847c9d-x5xks        2/2       Running   0          1h
+personservice-755f847c9d-x5z29        2/2       Running   0          1h
+personservice-755f847c9d-x5z29   1/2       Running   1         1h
+
+```
+
+Now you can in a separate terminal window execute the command `kubectl describe pod -n personservice <podname>` for the pod that was failing. In the event log you will see the following picture:
+
+```
+Events:
+  Type     Reason     Age               From                           Message
+  ----     ------     ----              ----                           -------
+  Warning  Unhealthy  26s (x6 over 1h)  kubelet, k8s-agent-27799012-2  Liveness probe failed: HTTP probe failed with statuscode: 503
+  Normal   Pulling    22s (x3 over 1h)  kubelet, k8s-agent-27799012-2  pulling image "andy008/mongokubernetes:0.0.3"
+  Normal   Killing    22s (x2 over 1h)  kubelet, k8s-agent-27799012-2  Killing container with id docker://personservice:Container failed liveness probe.. Container will be killed and recreated.
+  Normal   Pulled     21s (x3 over 1h)  kubelet, k8s-agent-27799012-2  Successfully pulled image "andy008/mongokubernetes:0.0.3"
+  Normal   Created    21s (x3 over 1h)  kubelet, k8s-agent-27799012-2  Created container
+  Normal   Started    21s (x3 over 1h)  kubelet, k8s-agent-27799012-2  Started container
+```
+
+It basically shows that kubernetes is recreating the failing container. After that the container is back alive.
+
+Now you can issue a POST request to /api/v1/monitoring/readiness?isReady=false. This will make the readinessProbe fail. You will again see this in your pod monitor. Now you can in a separate terminal window execute the command `kubectl describe pod -n personservice <podname>` for the pod that was failing. In the event log you will see the following picture:
+
+```
+  Type     Reason     Age               From                           Message
+  ----     ------     ----              ----                           -------
+  Normal   Created    4m (x3 over 1h)   kubelet, k8s-agent-27799012-2  Created container
+  Normal   Started    4m (x3 over 1h)   kubelet, k8s-agent-27799012-2  Started container
+  Warning  Unhealthy  12s (x4 over 4m)  kubelet, k8s-agent-27799012-2  Readiness probe failed: HTTP probe failed with statuscode: 503
+```
+
+Also all API calls to `/api/v1/person` endpoint (GET) will have the same value for `x-serving-host`. Hence the other pod was sucessfully excluded from loadbalancing. In order to bring it back to live issue `kubectl delete -n personservice <podname>`. Then Kubernetes will recreate it and it will be ready.
+
+## Operate your Service: Traces and Logs
+
+### Intro
+Kyma comes with tracing and logging support through Kubernetes, Istio and Jaeger. Tracing is mainly influenced by Istio (https://istio.io/docs/tasks/telemetry/distributed-tracing/) and Jaeger (https://www.jaegertracing.io/). Tracing enables you to corelate requests as they travel from service to service. All you need to do is propagate a set of tracing headers. The rest is taken care of by Istio and Jaeger.
+
+```
+   Client Span                                                Server Span
+┌──────────────────┐                                       ┌──────────────────┐
+│                  │                                       │                  │
+│   TraceContext   │           Http Request Headers        │   TraceContext   │
+│ ┌──────────────┐ │          ┌───────────────────┐        │ ┌──────────────┐ │
+│ │ TraceId      │ │          │ X─B3─TraceId      │        │ │ TraceId      │ │
+│ │              │ │          │                   │        │ │              │ │
+│ │ ParentSpanId │ │ Extract  │ X─B3─ParentSpanId │ Inject │ │ ParentSpanId │ │
+│ │              ├─┼─────────>│                   ├────────┼>│              │ │
+│ │ SpanId       │ │          │ X─B3─SpanId       │        │ │ SpanId       │ │
+│ │              │ │          │                   │        │ │              │ │
+│ │ Sampled      │ │          │ X─B3─Sampled      │        │ │ Sampled      │ │
+│ └──────────────┘ │          └───────────────────┘        │ └──────────────┘ │
+│                  │                                       │                  │
+└──────────────────┘                                       └──────────────────┘
+```
+
+Logs are just written to stdout so that they are accessible through `kubectl logs` and log aggregation solutions such as fluentd (not included in kyma).
+
+To embed all of this into our Spring Boot Application, no coding is necessary. All we need to do is embed Spring Cloud Sleuth (https://cloud.spring.io/spring-cloud-sleuth/):
+
+```
+		<dependency> 
+    		<groupId>org.springframework.cloud</groupId>
+    		<artifactId>spring-cloud-starter-sleuth</artifactId>
+		</dependency>
+```
+
+This will ensure our App:
+
+* Extracts and propagates Headers
+* Decorates logs with TraceId, ParentSpanId and SpanId
+
+In our Spring app logging uses SLF4J and is mainly based on the `LoggingAspect.java` which uses Aspect Oriented Programming to proxy and log every call to a class within the package hierarchy.
+
+### Testing Tracing
+
+To test the tracing you need to launch the Jaeger UI. Jaeger is not exposed to the Internet and hence you need to expose it using kubectl.
+
+On Windows:
+```
+kubectl get pod -n kyma-system -l app=jaeger -o jsonpath="{.items[0].metadata.name}"
+
+take the result and set <pod_name> 
+
+kubectl port-forward -n kyma-system <pod name> 16686:16686
+```
+
+On Mac/Linux:
+```
+kubectl port-forward -n kyma-system $(kubectl get pod -n kyma-system -l app=jaeger -o jsonpath='{.items[0].metadata.name}') 16686:16686
+```
+
+Now you can invoke it under `http://localhost:16686`. Further details can be found here: https://kyma-project.io/docs/latest/components/tracing
+
+Now we send a simple GET to /api/v1/person. In Jaeger we will make the following selections:
+
+* Service: Personservice
+* Limit Results: 20
+
+![Tracing](images/tracing1.png)
+
+Selecting the relevant record we will se the following picture:
+
+![Tracing](images/tracing2.png)
+
+This shows a simple request which is answered by the Personservice directly without propagation. It enters through Istio. Mixer ensures that all rules are followed and then the person service answers the request.
+
+Now we want to get more advanced and change a person which triggers a request to the events endpoint described in [Connect your Service to Kyma as Extension Platform](#connect-your-service-to-kyma-as-extension-platform). It will now also show up in the trace, but be more complex, as there is now also an outbound call to the events API (PATCH /api/v1/person/{id}).
+
+![Tracing](images/tracing4.png)
+
+Trace shows the following:
+
+![Tracing](images/tracing3.png)
+
+For those of you who really want to know what is going on, you can also create a new person and trace it all the way through the Lambda processing. However this requires your lambda to be properly hooked up to the service as described in [Extend your Person Service](#extend-your-person-service). Then you would see something along the lines of:
+
+![Tracing](images/tracing5.png)
+
+### Testing Logging
+
+Now since we know how the request was going through the Service Mesh, we also want to inspect what was happening within the App. Therefore we need to look into the logs. Fortunately Spring Cloud Sleuth has decorated them for us.
+
+To get there we open one of the traces again and extract the trace id and the pod it was executed on (Example is based on GET /api/v1/person)..
+
+![Getting the Log](images/gettingthelog1.png))
+
+Under View Options we select Trace JSON. This will provide access to the trace ID:
+
+![Getting the Log](images/gettingthelog2.png)
+
+For the pod we found we will issue the following kubectl command to print the logs into a text file (replace `<podname>` with the name identified in the trace): `kubectl logs -n personservice -c personservice <podname> > logs.txt`
+
+Based on the trace ID we can now search the logfile and see what happened inside the pod:
+
+![Getting the Log](images/gettingthelog3.png) 
+
+All of this is not very integrated, but here is also where the ecosystem kicks in with tools for log management/aggregation. Kyma and the underlying framewoks ensure that the data is collected. You have to integrate it into your corporate tooling based on the open standards leveraged (open tracing, etc.). 
